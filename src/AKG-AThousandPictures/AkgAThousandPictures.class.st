@@ -7,18 +7,20 @@ Creating a pillar file that has multiple images, e.g. jpg files, referenced and 
 
 A quick look at the code suggests several potential improvements:
 
+- ImageReadWriter class>>gtFormFromFileReference: wraps the stream in a ZnPositionableReadStream twice.  This adds two layers of unnecessary buffering and ZnBufferedReadStream will position: if the underlying stream does anyway.
+- ZnBufferedReadStream>>upToEnd uses a WriteStream which grows the buffer in steps, so files larger than the default buffer size will generate unnecessary copying and garbage collection.
+-- Ask the stream for it's size, 0 on error.  Get the size, then anything remaining.
+- Keep thumbnails of the images to reduce the file I/O and processing times.
+- If the image is larger than the required display area, scale the form down to reduce memory consumption.
 - Load images in a background process.  A template should be shown until the image is loaded (may be blank).
-- ZnBufferedReadStream>>upToEnd currently grows a ByteArray 64K at a time, so a 3MB image grows the ByteArray 48 times (to be confirmed), generating a lot of copying and garbage.
--- Ask the stream for it's size, nil on error.  Get the size, then anything remaining.
-- Keep thumbnails of the images to reduce the file I/O.
-- Does ImageReadWriter class>>gtFormFromFileReference: really need to wrap the stream in a ZnPositionableReadStream?  ZnBufferedReadStream will position: if the underlying stream does.
 
+Looking at the first two points above...
 
 !!Baseline File Reading Performance 
 
 Since ${class:name=PluginBasedJPEGReadWriter}$ loads the entire file in to a ByteArray, first measure the performance of reading the file in to memory.
 
-- All measurements below are made with three JPG files held on a in-memory (tempfs) file system.
+- All measurements below are made with three JPG files held on an in-memory (tempfs) file system.
 - The file sizes are: 330kB, 1.6MB and 4.1MB.
 
 On my Dell XPS13 9333 (2012 model):
@@ -26,10 +28,10 @@ On my Dell XPS13 9333 (2012 model):
 [[[language=smalltalk
 AkgAThousandPictures new bench01: (#('i323K.jpg' 'i1.5M.jpg' 'i4.0M.jpg')
 	collect: [ :each | '/dev/shm/pics' asFileReference / each ]).
-'330.35 kB: 1016 at 33.82607537621521/s
+""'330.35 kB: 1016 at 33.82607537621521/s
 1.56 MB: 198 at 6.59780073308897/s
 4.14 MB: 58 at 1.927550681289465/s
-'
+'""
 ]]]
 
 
@@ -91,10 +93,10 @@ First optimisation, remove the unnecessary ZnPositionableReadStreams:
 AkgAThousandPictures new bench02: (#('i323K.jpg' 'i1.5M.jpg' 'i4.0M.jpg')
 	collect: [ :each | '/dev/shm/pics' asFileReference / each ])
 
- '330.35 kB: 26563 at 885.403819872671/s
+""'330.35 kB: 26563 at 885.403819872671/s
 1.56 MB: 461 at 15.340077199520831/s
 4.14 MB: 126 at 4.183128050197537/s
-'
+'""
 ]]]
 
 
@@ -106,8 +108,7 @@ Check the number of times the write buffer is grown while reading i4.0M.jpg (not
 
 [[[language=smalltalk
 AkgAThousandPictures new bench03: '/dev/shm/pics/i4.0M.jpg' asFileReference
- 'Number of log entries: 15
-'
+""'Number of log entries: 15'""
 ]]]
 
 
@@ -117,25 +118,61 @@ If we request the number of bytes in the file a single buffer is allocated, popu
 AkgAThousandPictures new bench04: (#('i323K.jpg' 'i1.5M.jpg' 'i4.0M.jpg')
 	collect: [ :each | '/dev/shm/pics' asFileReference / each ])
 
- '330.35 kB: 158614 at 5286.604672866047/s
+""'330.35 kB: 158614 at 5286.604672866047/s
 1.56 MB: 2047 at 68.19468967585036/s
 4.14 MB: 562 at 18.71773522064946/s
-'
+'""
 ]]]
 
 
-Things are looking good so far:
+Things are looking good so far (reading files from disk to a ByteArray):
 
 |! Size |! Initial Speed |! Final Speed |! Ratio
 |{ 330K |{ 34            |{ 5286        |{ 155
 |{ 1.6M |{ 6.6           |{ 68          |{ 10
 |{ 4.1M |{ 1.9           |{ 18          |{ 9
 
-However this is only retrieving the data from the disk, it needs to be converted to a ${class:name=Form}$ for display.
+Unfortunately this is only retrieving the data from the disk, it needs to be converted to a ${class:name=Form}$ for display.
 
 
 !!Baseline JPG Performance
 
+Running the benchmark in a clean GToolkit image from 2 Apr 2019 gives:
+
+[[[language=smalltalk
+AkgAThousandPictures new bench05: (#('i323K.jpg' 'i1.5M.jpg' 'i4.0M.jpg')
+	collect: [ :each | '/dev/shm/pics' asFileReference / each ])
+""'330.35 kB: 264 at 8.798533577737043/s
+1.56 MB: 55 at 1.8209508674347767/s
+4.14 MB: 38 at 1.2472511241671316/s
+'""
+]]]
+
+
+!!Final Performance
+
+Modifying the system with the changes suggested from the tests above, see:
+
+- ImageReadWriter class>>gtFormFromFileReference:
+- ImageReadWriter class>>formFromStream:
+- ZnBufferedReadStream>>upToEnd
+- ZnBufferedReadStream>>savingPositionDo:
+
+
+[[[language=smalltalk
+AkgAThousandPictures new bench05: (#('i323K.jpg' 'i1.5M.jpg' 'i4.0M.jpg')
+	collect: [ :each | '/dev/shm/pics' asFileReference / each ])
+""'330.35 kB: 345 at 11.477809568168208/s
+1.56 MB: 68 at 2.253297103850487/s
+4.14 MB: 65 at 2.159540184059271/s
+'""
+]]]
+
+
+|! Size |! Initial Speed |! Final Speed |! Ratio
+|{ 330K |{ 8.8           |{ 11.5        |{ 1.3
+|{ 1.6M |{ 1.8           |{ 2.3         |{ 1.2
+|{ 4.1M |{ 1.2           |{ 2.2         |{ 1.8
 
 "
 Class {
@@ -143,6 +180,14 @@ Class {
 	#superclass : #Object,
 	#category : #'AKG-AThousandPictures'
 }
+
+{ #category : #convenience }
+AkgAThousandPictures class >> openDocument [
+	"Open an inspector on my story (class comments)"
+	<script>
+
+	GtInspector openOnPlayBook: (GtDocument forClass: self)
+]
 
 { #category : #benchmarking }
 AkgAThousandPictures >> bench01: fileCollection [
