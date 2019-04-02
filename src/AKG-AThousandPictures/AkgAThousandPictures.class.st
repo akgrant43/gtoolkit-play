@@ -14,10 +14,34 @@ A quick look at the code suggests several potential improvements:
 - Does ImageReadWriter class>>gtFormFromFileReference: really need to wrap the stream in a ZnPositionableReadStream?  ZnBufferedReadStream will position: if the underlying stream does.
 
 
-!!Baseline Performance 
+!!Baseline File Reading Performance 
 
-First off, measure the load speed of jpg files using ImageReadWriter.  PluginBasedJPEGReadWriter uses stream #upToEnd to get the contents of the file.
+Since ${class:name=PluginBasedJPEGReadWriter}$ loads the entire file in to a ByteArray, first measure the performance of reading the file in to memory.
 
+- All measurements below are made with three JPG files held on a in-memory (tempfs) file system.
+- The file sizes are: 330kB, 1.6MB and 4.1MB.
+
+On my Dell XPS13 9333 (2012 model):
+
+[[[language=smalltalk
+AkgAThousandPictures new bench01: (#('i323K.jpg' 'i1.5M.jpg' 'i4.0M.jpg')
+	collect: [ :each | '/dev/shm/pics' asFileReference / each ]).
+'330.35 kB: 1016 at 33.82607537621521/s
+1.56 MB: 198 at 6.59780073308897/s
+4.14 MB: 58 at 1.927550681289465/s
+'
+]]]
+
+
+!!Buffering the buffered buffer
+
+GToolkit loads images using 
+
+[[[
+ImageReadWriter class>>gtFormFromFileReference:
+]]]
+
+The method definition as at 2 Apr 2019 is shown below:
 
 [[[language=smalltalk
 ImageReadWriter class>>gtFormFromFileReference: aFileReference
@@ -48,7 +72,7 @@ ImageReadWriter class>>formFromStream: aBinaryReadStream
 	^ form	
 ]]]
 
-We can see that getting the data as a ByteArray can be done with: 
+We can see that getting the data as a ByteArray in the two methods above can be collapsed down to: 
 
 [[[language=smalltalk
 | byteArray aFileReference |
@@ -60,17 +84,6 @@ aFileReference binaryReadStreamDo: [ :stream | | bStream |
 	byteArray := bStream upToEnd].
 ]]]
 
-
-On my Dell XPS13 9333 (2012 model):
-
-[[[language=smalltalk
-AkgAThousandPictures new bench01: (#('i323K.jpg' 'i1.5M.jpg' 'i4.0M.jpg')
-	collect: [ :each | '/dev/shm/pics' asFileReference / each ]).
-'330.35 kB: 1016 at 33.82607537621521/s
-1.56 MB: 198 at 6.59780073308897/s
-4.14 MB: 58 at 1.927550681289465/s
-'
-]]]
 
 First optimisation, remove the unnecessary ZnPositionableReadStreams:
 
@@ -85,7 +98,11 @@ AkgAThousandPictures new bench02: (#('i323K.jpg' 'i1.5M.jpg' 'i4.0M.jpg')
 ]]]
 
 
-Check the number of times the write buffer is grown while reading i4.0M.jpg:
+!!Growing the write buffer
+
+ZnBufferedReadStream>>upToEnd eventually calls WriteStream>>nextPutAll: which grows the buffer in steps as it retrieves the contents of the file.
+
+Check the number of times the write buffer is grown while reading i4.0M.jpg (note that this requires adding some logging to WriteStream>>nextPutAll:, see the comment in AkgAThousandPictures>>bench03::
 
 [[[language=smalltalk
 AkgAThousandPictures new bench03: '/dev/shm/pics/i4.0M.jpg' asFileReference
@@ -94,7 +111,7 @@ AkgAThousandPictures new bench03: '/dev/shm/pics/i4.0M.jpg' asFileReference
 ]]]
 
 
-
+If we request the number of bytes in the file a single buffer is allocated, populated and returned, reducing the amount of data copying and garbage collection:
 
 [[[language=smalltalk
 AkgAThousandPictures new bench04: (#('i323K.jpg' 'i1.5M.jpg' 'i4.0M.jpg')
@@ -105,6 +122,21 @@ AkgAThousandPictures new bench04: (#('i323K.jpg' 'i1.5M.jpg' 'i4.0M.jpg')
 4.14 MB: 562 at 18.71773522064946/s
 '
 ]]]
+
+
+Things are looking good so far:
+
+|! Size |! Initial Speed |! Final Speed |! Ratio
+|{ 330K |{ 34            |{ 5286        |{ 155
+|{ 1.6M |{ 6.6           |{ 68          |{ 10
+|{ 4.1M |{ 1.9           |{ 18          |{ 9
+
+However this is only retrieving the data from the disk, it needs to be converted to a ${class:name=Form}$ for display.
+
+
+!!Baseline JPG Performance
+
+
 "
 Class {
 	#name : #AkgAThousandPictures,
@@ -194,6 +226,27 @@ AkgAThousandPictures >> bench04: fileCollection [
 			self assert: stream atEnd.
 			self assert: contents size = file asFileReference size.
 			] ] benchFor: 30 seconds.
+		file asFileReference size humanReadableSIByteSizeOn: reportStream.
+		reportStream
+			<< ': ';
+			print: bench iterations;
+			<< ' at ';
+			print: bench frequency asFloat;
+			<< '/s';
+			cr ].
+	^reportStream contents
+]
+
+{ #category : #benchmarking }
+AkgAThousandPictures >> bench05: fileCollection [
+	"Benchmark the set of supplied files using ImageReadWriter class>>gtFormFromFileReference: as it exists in Pharo 7 April 2019"
+
+	| reportStream |
+
+	reportStream := String new writeStream.
+	fileCollection do: [ :file | | bench |
+		3 timesRepeat: [ Smalltalk garbageCollect ].
+		bench := [ ImageReadWriter gtFormFromFileReference: file ] benchFor: 30 seconds.
 		file asFileReference size humanReadableSIByteSizeOn: reportStream.
 		reportStream
 			<< ': ';
