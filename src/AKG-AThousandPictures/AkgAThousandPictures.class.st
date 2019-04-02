@@ -13,6 +13,7 @@ A quick look at the code suggests several potential improvements:
 - Keep thumbnails of the images to reduce the file I/O and processing times.
 - If the image is larger than the required display area, scale the form down to reduce memory consumption.
 - Load images in a background process.  A template should be shown until the image is loaded (may be blank).
+- Extend PluginBasedJPEGReadWriter to accept a file name and return the form data (avoiding the need to read the file contents in to object memory).
 
 Looking at the first two points above...
 
