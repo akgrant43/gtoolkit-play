@@ -20,7 +20,7 @@ ZnBufferedReadStream >> upToEnd [
 		on: Error
 		do: [ 0 ].
 	streamSize > 0 ifTrue:
-		[ result := self next: streamSize ].
+		[ result := self next: (streamSize - self position) ].
 	"Some streams may only have an estimate, so if not at the end, get the rest"
 	self atEnd ifFalse:
 		[ result := self collectionSpecies streamContents: [ :out | 
