@@ -1,7 +1,25 @@
-Extension { #name : #ZnBufferedReadStream }
+"
+GtBufferedReadStream subclasses ZnBufferedReadStream to provide two enhancements:
 
-{ #category : #'*AKG-AThousandPictures' }
-ZnBufferedReadStream >> savingPositionDo: block [
+- #upToEnd is optimised to attempt to retrieve the entire contents in one call.
+  Previously it would retrieve multiple buffers and write them to a WriteStream, resulting in unnecessary copying and garbage.
+- #savingPositionDo: has been added.  ZnBufferedReadStream supports position, so there's no reason to use a ZnPositionableReadStream in this case.
+
+Both of these will be submitted as enhancments to the core system.
+
+
+!!Internal Representation and Key Implementation Points.
+
+No other changes are made to ZnBufferedReadStream, the interface is the same.
+"
+Class {
+	#name : #GtBufferedReadStream,
+	#superclass : #ZnBufferedReadStream,
+	#category : #'AKG-AThousandPictures'
+}
+
+{ #category : #enumerating }
+GtBufferedReadStream >> savingPositionDo: block [
 	"Execute block so that any reading from me in it has no effect afterwards. I remember the current #position and move back to it using #position: after evaluating block. My buffer size limits how long the excursion can be. A SubscriptOutOfBounds exception will be signalled in case this operation cannot be completed."
 	
 	| savedPosition |
@@ -9,8 +27,8 @@ ZnBufferedReadStream >> savingPositionDo: block [
 	^ block ensure: [ self position: savedPosition ]
 ]
 
-{ #category : #'*AKG-AThousandPictures' }
-ZnBufferedReadStream >> upToEnd [
+{ #category : #accessing }
+GtBufferedReadStream >> upToEnd [
 	"Read elements until the stream is atEnd and return them as a collection."
 
 	| streamSize result |
