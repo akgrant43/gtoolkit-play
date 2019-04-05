@@ -1,19 +1,21 @@
 "
 !A Thousand Pictures
 
-This class is the story of improving image display with GToolkit.
+This class is the story of improving image display speed with GToolkit.
 
 Creating a pillar file that has multiple images, e.g. jpg files, referenced and displayed will likely fail to scroll smoothly due to the delay while the images are being loaded and scaled in the UI process.
 
 A quick look at the code suggests several potential improvements:
 
-- ImageReadWriter class>>gtFormFromFileReference: wraps the stream in a ZnPositionableReadStream twice.  This adds two layers of unnecessary buffering and ZnBufferedReadStream will position: if the underlying stream does anyway.
-- ZnBufferedReadStream>>upToEnd uses a WriteStream which grows the buffer in steps, so files larger than the default buffer size will generate unnecessary copying and garbage collection.
--- Ask the stream for it's size, 0 on error.  Get the size, then anything remaining.
+- ${method:name=ImageReadWriter class>>#gtFormFromFileReference:}$ wraps the stream in a ${class:name=ZnPositionableReadStream}$ twice.  This adds two layers of unnecessary buffering and anyway ${class:name=ZnBufferedReadStream}$ can position: if the underlying stream does.
+- ${method:name=ZnBufferedReadStream>>#upToEnd}$  makes multiple calls to the primitive to read buffers from the file and uses a ${class:name=WriteStream}$ which grows its buffer in steps, so files larger than the default buffer size will generate unnecessary copying and garbage collection.
+-- Ask the stream for it's size, or 0 on error.  Get the size, then anything remaining.
 - Keep thumbnails of the images to reduce the file I/O and processing times.
 - If the image is larger than the required display area, scale the form down to reduce memory consumption.
 - Load images in a background process.  A template should be shown until the image is loaded (may be blank).
 - Extend PluginBasedJPEGReadWriter to accept a file name and return the form data (avoiding the need to read the file contents in to object memory).
+- Write the image directly to the underlying canvas, e.g. Moz2D
+- Use asynchronouse file I/O.
 
 Looking at the first two points above...
 
@@ -38,15 +40,11 @@ AkgAThousandPictures new bench01: (#('i323K.jpg' 'i1.5M.jpg' 'i4.0M.jpg')
 
 !!Buffering the buffered buffer
 
-GToolkit loads images using 
-
-[[[
-ImageReadWriter class>>gtFormFromFileReference:
-]]]
+GToolkit loads images using ${method:name=ImageReadWriter class>>#gtFormFromFileReference:}$
 
 The method definition as at 2 Apr 2019 is shown below:
 
-[[[language=smalltalk
+[[[language=bash
 ImageReadWriter class>>gtFormFromFileReference: aFileReference
 	<return: #Form>
 	^ aFileReference binaryReadStreamDo: [ :aStream | 
@@ -57,7 +55,7 @@ ImageReadWriter class>>gtFormFromFileReference: aFileReference
 
 and
 
-[[[language=smalltalk
+[[[language=bash
 ImageReadWriter class>>formFromStream: aBinaryReadStream
 	""Answer a Form of the image stored on aBinaryReadStream.
 	This will (normally) autodetect the format and delegate to the correct concrete subclass.
@@ -88,7 +86,7 @@ aFileReference binaryReadStreamDo: [ :stream | | bStream |
 ]]]
 
 
-First optimisation, remove the unnecessary ZnPositionableReadStreams:
+First optimisation, remove the unnecessary ${class:name=ZnPositionableReadStream}$ :
 
 [[[language=smalltalk
 AkgAThousandPictures new bench02: (#('i323K.jpg' 'i1.5M.jpg' 'i4.0M.jpg')
@@ -103,9 +101,9 @@ AkgAThousandPictures new bench02: (#('i323K.jpg' 'i1.5M.jpg' 'i4.0M.jpg')
 
 !!Growing the write buffer
 
-ZnBufferedReadStream>>upToEnd eventually calls WriteStream>>nextPutAll: which grows the buffer in steps as it retrieves the contents of the file.
+${method:name=ZnBufferedReadStream>>#upToEnd}$ eventually calls ${method:name=WriteStream>>#nextPutAll:}$ which grows the buffer in steps as it retrieves the contents of the file.
 
-Check the number of times the write buffer is grown while reading i4.0M.jpg (note that this requires adding some logging to WriteStream>>nextPutAll:, see the comment in AkgAThousandPictures>>bench03::
+Check the number of times the write buffer is grown while reading i4.0M.jpg (note that this requires adding some logging to  ${method:name=WriteStream>>#nextPutAll:}$, see the comment in ${method:name=AkgAThousandPictures>>#bench03:}$ AkgAThousandPictures>>bench03::
 
 [[[language=smalltalk
 AkgAThousandPictures new bench03: '/dev/shm/pics/i4.0M.jpg' asFileReference
@@ -239,7 +237,15 @@ AkgAThousandPictures >> bench02: fileCollection [
 
 { #category : #benchmarking }
 AkgAThousandPictures >> bench03: aFileReference [
-	"Count the number of buffer expansions performed by ZnBufferedReadStream when reading the entire contents of the supplied file"
+	"Count the number of buffer expansions performed by ZnBufferedReadStream when reading the entire contents of the supplied file.
+	Note that WriteStream>>nextPutAll: must have the following logging added to it first.  Replace:
+	
+	self growTo: newEnd + 10
+		
+	with
+	
+	{collection size. newEnd+10. (collection size - (newEnd+10)) abs.} asBeaconSignal emit.
+		self growTo: newEnd + 10"
 
 	| logger contents |
 
